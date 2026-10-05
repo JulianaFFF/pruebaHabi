@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Billetera con vacas</title>
+<style>
+  :root {
+    --bg: #f6f5fb; --card: #fff; --text: #1d1b2c; --muted: #6b6880; --line: #e6e3f0;
+    --brand: #5b2bb5; --brand-soft: #efe9fb; --ok: #138a62; --bad: #c43d3d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+           padding: 14px 24px; background: var(--card); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; color: var(--brand); }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  h3 { font-size: 14px; margin: 16px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  main { display: grid; grid-template-columns: 260px 1fr 1fr; gap: 16px; padding: 16px 24px; max-width: 1400px; margin: auto; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; padding: 16px; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .stack > * + * { margin-top: 16px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  input, select, button { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+  input, select { flex: 1 1 120px; background: #fff; }
+  button { background: var(--brand); color: #fff; border: 0; cursor: pointer; font-weight: 600; }
+  button.secondary { background: var(--brand-soft); color: var(--brand); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .accounts button { display: flex; justify-content: space-between; width: 100%; margin-bottom: 6px;
+                     background: transparent; color: var(--text); border: 1px solid var(--line); font-weight: 400; }
+  .accounts button.active { border-color: var(--brand); background: var(--brand-soft); }
+  .balance { font-size: 32px; font-weight: 700; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .pos { color: var(--ok); } .neg { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 8px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  td.num { text-align: right; white-space: nowrap; }
+  .badge { font-size: 13px; padding: 4px 10px; border-radius: 99px; background: var(--brand-soft); }
+  .badge.ok { color: var(--ok); } .badge.bad { color: #fff; background: var(--bad); }
+  .bar { height: 10px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 8px 0; }
+  .bar > div { height: 100%; background: var(--brand); }
+  .pool { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .pool + .pool { margin-top: 12px; }
+  .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .status { font-size: 12px; font-weight: 600; text-transform: uppercase; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 16px;
+           border-radius: 8px; color: #fff; display: none; max-width: 90vw; }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Billetera con vacas</h1>
+  <span id="audit" class="badge">Auditando…</span>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Cuentas</h2>
+    <div class="accounts" id="accounts"></div>
+    <form id="create-account">
+      <input name="name" placeholder="Nombre" required maxlength="80">
+      <button>Crear</button>
+    </form>
+  </section>
+
+  <section class="card stack" id="wallet">
+    <p class="empty">Crea o selecciona una cuenta para empezar.</p>
+  </section>
+
+  <section class="card stack">
+    <div>
+      <h2>Vacas</h2>
+      <p class="muted">Un fondo con meta: cada uno aporta su parte y, al completarse, la plata llega toda junta al beneficiario.
+        Si se cancela, a cada uno se le devuelve exactamente lo suyo.</p>
+    </div>
+    <form id="create-pool">
+      <input name="name" placeholder="¿Para qué? (ej: Mercado de mamá)" required maxlength="80">
+      <input name="goal" type="number" min="1" step="1" placeholder="Meta $" required>
+      <select name="beneficiary" required></select>
+      <button>Crear vaca</button>
+    </form>
+    <div id="pools"></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const fmt = new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
+const money = (n) => fmt.format(n);
+const KIND = { deposit: "Carga", transfer: "Transferencia", pool_contribution: "Aporte a vaca",
+               pool_release: "Vaca liberada", pool_refund: "Devolución de vaca" };
+const STATUS = { open: "Abierta", released: "Liberada", cancelled: "Cancelada" };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+let accounts = [];
+let current = localStorage.getItem("current");
+
+// Cada formulario que mueve plata lleva su propia Idempotency-Key. Se renueva solo cuando
+// el servidor RESPONDE; si la red falla, el reintento reutiliza la misma clave y no duplica.
+function formKey(form) {
+  if (!form.dataset.key) form.dataset.key = crypto.randomUUID();
+  return form.dataset.key;
+}
+
+async function api(path, { method = "GET", body, form } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (form) headers["Idempotency-Key"] = formKey(form);
+  const res = await fetch(`/api${path}`, { method, headers, body: body && JSON.stringify(body) });
+  if (form) delete form.dataset.key; // hubo respuesta: la próxima operación es otra
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data.error?.message ?? data.detail?.map?.((d) => d.msg).join(", ") ?? "Error";
+    throw new Error(msg);
+  }
+  return data;
+}
+
+function toast(msg, ok = true) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.style.background = ok ? "var(--ok)" : "var(--bad)";
+  el.style.display = "block";
+  clearTimeout(el.timer);
+  el.timer = setTimeout(() => (el.style.display = "none"), 3500);
+}
+
+// Envuelve el submit: deshabilita el botón (anti doble clic) y muestra errores.
+function onSubmit(form, handler) {
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const button = form.querySelector("button");
+    button.disabled = true;
+    try {
+      await handler(new FormData(form), form);
+      form.reset();
+      await refresh();
+    } catch (err) {
+      toast(err.message, false);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+async function refresh() {
+  accounts = await api("/accounts");
+  if (!accounts.some((a) => a.id === current)) current = accounts[0]?.id ?? null;
+  renderAccounts();
+  await Promise.all([renderWallet(), renderPools(), renderAudit()]);
+}
+
+function renderAccounts() {
+  document.getElementById("accounts").innerHTML = accounts.map((a) =>
+    `<button class="${a.id === current ? "active" : ""}" data-id="${a.id}">
+       <span>${esc(a.name)}</span><span>${money(a.balance)}</span></button>`).join("");
+  const others = accounts.filter((a) => a.id !== current);
+  document.querySelector("#create-pool select").innerHTML =
+    `<option value="">Beneficiario…</option>` +
+    accounts.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("");
+  document.querySelectorAll("#wallet select[name=to]").forEach((s) => {
+    s.innerHTML = others.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("");
+  });
+}
+
+document.getElementById("accounts").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-id]");
+  if (!btn) return;
+  current = btn.dataset.id;
+  localStorage.setItem("current", current);
+  refresh();
+});
+
+async function renderWallet() {
+  const el = document.getElementById("wallet");
+  if (!current) return;
+  const [account, history] = await Promise.all([api(`/accounts/${current}`), api(`/accounts/${current}/history?limit=30`)]);
+  const others = accounts.filter((a) => a.id !== current);
+  el.innerHTML = `
+    <div>
+      <div class="muted">Usando la cuenta de</div>
+      <h2 style="margin:0">${esc(account.name)}</h2>
+      <div class="balance">${money(account.balance)}</div>
+    </div>
+    <div>
+      <h3>Cargar saldo (simulado)</h3>
+      <form id="deposit">
+        <input name="amount" type="number" min="1" step="1" placeholder="Monto $" required>
+        <button>Cargar</button>
+      </form>
+    </div>
+    <div>
+      <h3>Transferir</h3>
+      <form id="transfer">
+        <select name="to" required>${others.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>
+        <input name="amount" type="number" min="1" step="1" placeholder="Monto $" required>
+        <input name="description" placeholder="¿Para qué es? (ej: arriendo octubre)" maxlength="200" style="flex-basis:100%">
+        <button>Enviar</button>
+      </form>
+    </div>
+    <div>
+      <h3>Historial</h3>
+      ${history.items.length ? `<table>${history.items.map((i) => `
+        <tr>
+          <td><b>${esc(i.description || KIND[i.kind])}</b>
+              <div class="muted">${KIND[i.kind]} · ${esc(i.counterparty)} · ${new Date(i.created_at).toLocaleString("es-CO")}</div></td>
+          <td class="num ${i.amount > 0 ? "pos" : "neg"}">${i.amount > 0 ? "+" : ""}${money(i.amount)}
+              <div class="muted">${money(i.balance_after)}</div></td>
+        </tr>`).join("")}</table>` : `<p class="empty">Sin movimientos todavía.</p>`}
+    </div>`;
+
+  onSubmit(el.querySelector("#deposit"), async (data, form) => {
+    await api(`/accounts/${current}/deposits`, { method: "POST", form, body: { amount: Number(data.get("amount")) } });
+    toast("Saldo cargado");
+  });
+  onSubmit(el.querySelector("#transfer"), async (data, form) => {
+    await api("/transfers", { method: "POST", form, body: {
+      from_account_id: current, to_account_id: data.get("to"),
+      amount: Number(data.get("amount")), description: data.get("description") || null } });
+    toast("Transferencia enviada");
+  });
+}
+
+async function renderPools() {
+  const pools = await api("/pools");
+  const el = document.getElementById("pools");
+  if (!pools.length) { el.innerHTML = `<p class="empty">No hay vacas todavía.</p>`; return; }
+  el.innerHTML = pools.map((p) => {
+    const raised = p.status === "open" ? p.balance : p.contributions.reduce((s, c) => s + c.amount, 0);
+    const pct = Math.min(100, Math.round((raised / p.goal_amount) * 100));
+    const isOwner = p.owner_id === current;
+    return `
+    <div class="pool" data-id="${p.id}">
+      <div class="row"><b>${esc(p.name)}</b><span class="status">${STATUS[p.status]}</span></div>
+      <div class="muted">Para ${esc(p.beneficiary_name)} · creada por ${esc(p.owner_name)}</div>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      <div class="row"><span>${money(raised)} de ${money(p.goal_amount)}</span>
+        ${p.status === "open" ? `<span class="muted">faltan ${money(p.remaining)}</span>` : ""}</div>
+      ${p.contributions.length ? `<table>${p.contributions.map((c) =>
+        `<tr><td>${esc(c.account_name)}</td><td class="num">${money(c.amount)}</td></tr>`).join("")}</table>` : ""}
+      ${p.status === "open" && current ? `
+        <form class="contribute" style="margin-top:10px">
+          <input name="amount" type="number" min="1" step="1" placeholder="Mi aporte $" required>
+          <button>Aportar</button>
+        </form>
+        ${isOwner ? `<div style="display:flex;gap:8px;margin-top:8px">
+          <button class="release" ${p.remaining ? "disabled title='Aún no llega a la meta'" : ""}>Entregar a ${esc(p.beneficiary_name)}</button>
+          <button class="secondary cancel">Cancelar y devolver</button></div>` : ""}` : ""}
+    </div>`;
+  }).join("");
+
+  el.querySelectorAll(".pool").forEach((card) => {
+    const id = card.dataset.id;
+    const form = card.querySelector("form.contribute");
+    if (form) onSubmit(form, async (data, form) => {
+      await api(`/pools/${id}/contributions`, { method: "POST", form, body: { account_id: current, amount: Number(data.get("amount")) } });
+      toast("Aporte registrado");
+    });
+    for (const action of ["release", "cancel"]) {
+      card.querySelector(`.${action}`)?.addEventListener("click", async (e) => {
+        if (action === "cancel" && !confirm("¿Cancelar la vaca y devolverle a cada uno su aporte?")) return;
+        e.target.disabled = true;
+        try {
+          await api(`/pools/${id}/${action}`, { method: "POST", body: { requested_by: current } });
+          toast(action === "release" ? "¡Vaca entregada!" : "Vaca cancelada, plata devuelta");
+          await refresh();
+        } catch (err) { toast(err.message, false); e.target.disabled = false; }
+      });
+    }
+  });
+}
+
+async function renderAudit() {
+  const r = await api("/reconciliation");
+  const el = document.getElementById("audit");
+  el.className = `badge ${r.ok ? "ok" : "bad"}`;
+  el.textContent = r.ok
+    ? `✓ Libro cuadrado · ${money(r.money_in_system)} en el sistema`
+    : "✗ ¡El libro NO cuadra!";
+  el.title = JSON.stringify(r, null, 2);
+}
+
+onSubmit(document.getElementById("create-account"), async (data) => {
+  const a = await api("/accounts", { method: "POST", body: { name: data.get("name") } });
+  current = a.id;
+  localStorage.setItem("current", current);
+});
+
+onSubmit(document.getElementById("create-pool"), async (data) => {
+  if (!current) throw new Error("Selecciona primero tu cuenta");
+  await api("/pools", { method: "POST", body: {
+    name: data.get("name"), goal_amount: Number(data.get("goal")),
+    owner_id: current, beneficiary_id: data.get("beneficiary") } });
+  toast("Vaca creada");
+});
+
+refresh().catch((err) => toast(err.message, false));
+</script>
+</body>
+</html>
