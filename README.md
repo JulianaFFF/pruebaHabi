@@ -179,7 +179,7 @@ demo. Con eso, la IA escribió la mayor parte del código, los tests y el borrad
 **Lo que hice yo:** además de esas decisiones, instalé lo que faltaba en mi máquina para
 desplegar con Docker Compose. Cuando estuvo arriba, no me quedé con "los tests pasan": le pedí
 que verificara contra la app desplegada que se cumplieran las características del enunciado, y de
-ahí salió `scripts/verify.py`. Después edité el README con mis palabras (la sección 04 es mía) y
+ahí salió `scripts/verify.py`. Después edité el README con mis palabras y
 le pedí que lo corrigiera y completara; las partes que redactó la IA las revisé para que solo
 dijeran cosas que son verdad.
 
