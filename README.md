@@ -175,8 +175,16 @@ reintentos, deadlocks). Luego me planteó las decisiones que me tocaban a mí, y
 **las vacas** como funcionalidad extra (entre varias opciones, porque me pareció menos obvia que
 dividir una cuenta y más fiel a la idea de "contexto") y **un frontend web sencillo** para la
 demo. Con eso, la IA escribió la mayor parte del código, los tests y el borrador de este README.
-Yo [completa con lo que hiciste: leí `ledger.py` y `schema.sql` hasta poder explicar cada
-bloqueo, desplegué con Docker, corrí la verificación, escribí y corregí secciones del README…].
+
+**Lo que hice yo:** además de esas decisiones, instalé lo que faltaba en mi máquina para
+desplegar con Docker Compose. Cuando estuvo arriba, no me quedé con "los tests pasan": le pedí
+que verificara contra la app desplegada que se cumplieran las características del enunciado, y de
+ahí salió `scripts/verify.py`. Después edité el README con mis palabras (la sección 04 es mía) y
+le pedí que lo corrigiera y completara; las partes que redactó la IA las revisé para que solo
+dijeran cosas que son verdad.
+
+Para ser honesto: la IA hizo mucho del trabajo pesado. Mi rol fue más de decidir, preguntar y
+verificar que de escribir código línea por línea.
 
 **Dónde se equivocó o casi me hace equivocar:**
 - **Supuso cosas de mi entorno.** Escribió los comandos asumiendo que yo tenía `docker compose`,
